@@ -1,5 +1,7 @@
 # Assistant AVV — Matters
 
+**Live : [matters-avv-case.streamlit.app](https://matters-avv-case.streamlit.app)**
+
 Assistant avant-vente conversationnel pour consultants Matters. Colle des notes brutes d'entretien client et obtiens en temps réel : diagnostic client, recommandation d'intervention, questions de cadrage.
 
 ## Ce que ça fait
