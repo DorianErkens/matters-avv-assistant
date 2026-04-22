@@ -2,8 +2,11 @@ import streamlit as st
 import anthropic
 import json
 import os
+import html
 from dotenv import load_dotenv
 from system_prompt import SYSTEM_PROMPT
+
+MAX_INPUT_CHARS = 8000
 
 load_dotenv()
 
@@ -230,9 +233,9 @@ def init_state():
 
 
 def call_claude(messages: list) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("ANTHROPIC_API_KEY") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        st.error("ANTHROPIC_API_KEY manquante dans le fichier .env")
+        st.error("ANTHROPIC_API_KEY manquante — configure-la dans .env ou dans les Secrets Streamlit.")
         st.stop()
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -242,6 +245,8 @@ def call_claude(messages: list) -> str:
         system=SYSTEM_PROMPT,
         messages=messages,
     )
+    if not response.content:
+        raise ValueError("Réponse vide de l'API Claude.")
     return response.content[0].text
 
 
@@ -277,7 +282,7 @@ def parse_response(raw: str) -> dict:
 
 
 def analyze_notes(notes: str):
-    messages = [{"role": "user", "content": f"Notes d'entretien :\n\n{notes}"}]
+    messages = [{"role": "user", "content": f"<notes>\n{notes}\n</notes>"}]
     raw = call_claude(messages)
     data = parse_response(raw)
 
@@ -320,8 +325,14 @@ def send_chat(user_message: str):
 
 def toggle_question(idx: int):
     cycle = {"a_poser": "posee", "posee": "repondue", "repondue": "a_poser"}
-    q = st.session_state.questions[idx]
-    st.session_state.questions[idx]["statut"] = cycle[q["statut"]]
+    if 0 <= idx < len(st.session_state.questions):
+        current = st.session_state.questions[idx].get("statut", "a_poser")
+        st.session_state.questions[idx]["statut"] = cycle.get(current, "a_poser")
+
+
+def e(val) -> str:
+    """Escape a value for safe HTML interpolation."""
+    return html.escape(str(val)) if val else ""
 
 
 # ── Init ──────────────────────────────────────────────────────────────────────
@@ -350,12 +361,14 @@ with col_left:
     )
 
     if st.button("Analyser →", use_container_width=True):
-        if notes_input.strip():
+        if not notes_input.strip():
+            st.warning("Ajoute des notes avant d'analyser.")
+        elif len(notes_input) > MAX_INPUT_CHARS:
+            st.error(f"Notes trop longues ({len(notes_input)} caractères). Limite : {MAX_INPUT_CHARS}.")
+        else:
             with st.spinner("Analyse en cours..."):
                 analyze_notes(notes_input)
             st.rerun()
-        else:
-            st.warning("Ajoute des notes avant d'analyser.")
 
     if st.session_state.analyzed:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -394,7 +407,7 @@ with col_right:
         # Message consultant
         if st.session_state.last_message:
             st.markdown(
-                f'<div class="message-box">{st.session_state.last_message}</div>',
+                f'<div class="message-box">{e(st.session_state.last_message)}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -412,25 +425,25 @@ with col_right:
         ]
         for col, (label, val) in zip(meta_cols, fields):
             col.markdown(
-                f'<div class="card-label">{label}</div><div class="card-value">{val}</div>',
+                f'<div class="card-label">{label}</div><div class="card-value">{e(val)}</div>',
                 unsafe_allow_html=True,
             )
 
         if diag.get("secteur"):
             st.markdown(
                 f'<div class="card-label" style="margin-top:14px;">Secteur</div>'
-                f'<div class="card-value">{diag["secteur"]}</div>',
+                f'<div class="card-value">{e(diag["secteur"])}</div>',
                 unsafe_allow_html=True,
             )
 
         if diag.get("enjeux"):
             st.markdown('<div class="card-label" style="margin-top:14px;">Enjeux détectés</div>', unsafe_allow_html=True)
-            tags_html = "".join(f'<span class="tag">{e}</span>' for e in diag["enjeux"])
+            tags_html = "".join(f'<span class="tag">{e(enjeu)}</span>' for enjeu in diag["enjeux"])
             st.markdown(f'<div class="tag-row">{tags_html}</div>', unsafe_allow_html=True)
 
         if diag.get("signaux_importants"):
             st.markdown('<div class="card-label" style="margin-top:14px;">Signaux clés</div>', unsafe_allow_html=True)
-            tags_html = "".join(f'<span class="tag-signal">{s}</span>' for s in diag["signaux_importants"])
+            tags_html = "".join(f'<span class="tag-signal">{e(s)}</span>' for s in diag["signaux_importants"])
             st.markdown(f'<div class="tag-row">{tags_html}</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
@@ -441,21 +454,21 @@ with col_right:
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown(
-            f'<div class="intervention-type">{interv.get("type", "—")}</div>'
-            f'<div class="intervention-justification">{interv.get("justification", "")}</div>',
+            f'<div class="intervention-type">{e(interv.get("type", "—"))}</div>'
+            f'<div class="intervention-justification">{e(interv.get("justification", ""))}</div>',
             unsafe_allow_html=True,
         )
 
         interv_cols = st.columns(2)
         interv_cols[0].markdown(
             f'<div class="card-label">Durée estimée</div>'
-            f'<div class="card-value">{interv.get("duree_estimee", "—")}</div>',
+            f'<div class="card-value">{e(interv.get("duree_estimee", "—"))}</div>',
             unsafe_allow_html=True,
         )
         profils = interv.get("profils_suggeres", [])
         interv_cols[1].markdown(
             f'<div class="card-label">Équipe</div>'
-            f'<div class="card-value">{", ".join(profils) if profils else "—"}</div>',
+            f'<div class="card-value">{e(", ".join(profils)) if profils else "—"}</div>',
             unsafe_allow_html=True,
         )
 
@@ -463,7 +476,7 @@ with col_right:
         if etapes:
             st.markdown('<div class="card-label" style="margin-top:14px;">Étapes clés</div>', unsafe_allow_html=True)
             for etape in etapes:
-                st.markdown(f'<div class="card-value" style="margin: 4px 0; font-size:13px;">→ {etape}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="card-value" style="margin: 4px 0; font-size:13px;">→ {e(etape)}</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -482,14 +495,14 @@ with col_right:
             with q_col:
                 st.markdown(
                     f'<div class="question-item">'
-                    f'<div class="{text_class}">{statut_icons[statut]} {q["question"]}</div>'
-                    f'<div class="question-objectif">{q.get("objectif", "")}</div>'
+                    f'<div class="{text_class}">{statut_icons.get(statut, "○")} {e(q.get("question", ""))}</div>'
+                    f'<div class="question-objectif">{e(q.get("objectif", ""))}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
             with btn_col:
                 st.markdown("<div style='padding-top: 14px;'>", unsafe_allow_html=True)
-                if st.button(statut_labels[statut], key=f"q_{i}_{q['id']}"):
+                if st.button(statut_labels.get(statut, "À poser"), key=f"q_{i}_{q.get('id', i)}"):
                     toggle_question(i)
                     st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
